@@ -18,6 +18,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let mut builder_fields = vec![];
     let mut builder_fields_for_new = vec![];
+    let mut methods = vec![];
 
     for field in fields {
         let vis = field.vis;
@@ -30,6 +31,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
         builder_fields_for_new.push(quote! {
             #ident: None,
+        });
+
+        methods.push(quote! {
+            fn #ident(&mut self, #ident: #ty) -> &mut Self {
+                self.#ident = Some(#ident);
+                self
+            }
         });
     }
 
@@ -48,6 +56,12 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     )*
                 }
             }
+        }
+
+        impl #builder_name {
+            #(
+                #methods
+            )*
         }
     }
     .into()
