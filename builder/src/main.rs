@@ -1,11 +1,15 @@
 // for playground
 
-use derive_builder::Builder;
+use derive_builder::{Builder, Nop};
 
-#[derive(Builder)]
+#[derive(Builder, Nop)]
 pub struct Command {
     executable: String,
+    #[nop]
+    #[builder(each = "arg")]
     args: Vec<String>,
+    #[builder(each = "env")]
+    #[nop]
     env: Vec<String>,
     current_dir: Option<String>,
 }
@@ -13,18 +17,11 @@ pub struct Command {
 fn main() {
     let command = Command::builder()
         .executable("cargo".to_owned())
-        .args(vec!["build".to_owned(), "--release".to_owned()])
-        .env(vec![])
+        .arg("build".to_owned())
+        .arg("--release".to_owned())
         .build()
         .unwrap();
-    assert!(command.current_dir.is_none());
 
-    let command = Command::builder()
-        .executable("cargo".to_owned())
-        .args(vec!["build".to_owned(), "--release".to_owned()])
-        .env(vec![])
-        .current_dir("..".to_owned())
-        .build()
-        .unwrap();
-    assert!(command.current_dir.is_some());
+    assert_eq!(command.executable, "cargo");
+    assert_eq!(command.args, vec!["build", "--release"]);
 }
