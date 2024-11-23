@@ -212,11 +212,12 @@ fn vec_field(
     } = attr.parse_args()?;
 
     // attr全体のSpanを得る方法がわからず...
+    // 代わりに new_spanned を使用
 
     let path = path.require_ident()?;
     if path != "each" {
-        return Err(Error::new(
-            path.span(),
+        return Err(Error::new_spanned(
+            attr.meta.clone(),
             "expected `builder(each = \"...\")`",
         ));
     }
@@ -225,8 +226,8 @@ fn vec_field(
         lit: Lit::Str(lit), ..
     }) = value
     else {
-        return Err(Error::new(
-            path.span(),
+        return Err(Error::new_spanned(
+            attr.meta.clone(),
             "expected `builder(each = \"...\")`",
         ));
     };
