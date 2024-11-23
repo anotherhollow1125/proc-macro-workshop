@@ -1,27 +1,36 @@
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse_macro_input, Attribute, Data, DataStruct, DeriveInput, Expr, ExprLit, Field, Ident, Lit,
-    Meta, MetaNameValue, PathArguments, Type, TypePath,
+    parse_macro_input, Attribute, Data, DataStruct, DeriveInput, Error, Expr, ExprLit, Field,
+    Fields, Ident, Lit, Meta, MetaNameValue, PathArguments, Result, Type, TypePath,
 };
 
-#[proc_macro_derive(Nop, attributes(nop))]
-pub fn nop(_input: TokenStream) -> TokenStream {
-    quote! {}.into()
-}
-
 #[proc_macro_derive(Builder, attributes(builder))]
-pub fn derive(input: TokenStream) -> TokenStream {
+pub fn derive_builder(input: TokenStream) -> TokenStream {
+    let derive_input = parse_macro_input!(input as DeriveInput);
+
     let DeriveInput {
         ident,
         data: Data::Struct(DataStruct { fields, .. }),
         ..
-    } = parse_macro_input!(input as DeriveInput)
+    } = derive_input
     else {
-        panic!("Invalid Input");
+        return Error::new(
+            derive_input.ident.span(),
+            "Invalid Target: this macro can be used for only structs.",
+        )
+        .into_compile_error()
+        .into();
     };
 
+    derive_builder_inner(ident, fields)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+fn derive_builder_inner(ident: Ident, fields: Fields) -> Result<TokenStream2> {
+    let span = ident.span();
     let builder_name = format_ident!("{}Builder", ident);
 
     let mut builder_fields = vec![];
@@ -30,9 +39,19 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let mut builder_to_struct = vec![];
 
     for field in fields {
-        let Field { attrs, .. } = field.clone();
+        let Field {
+            attrs,
+            ident: Some(ident),
+            ..
+        } = field.clone()
+        else {
+            return Err(Error::new(
+                span,
+                "Invalid Field: this macro can be used for only named fields.",
+            ));
+        };
 
-        // dbg!(&attrs);
+        let span = ident.span();
 
         let attr = attrs.iter().find(|attr| {
             matches!(
@@ -46,25 +65,27 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
         if let Some(attr) = attr {
             vec_field(
+                span,
                 field.clone(),
                 attr,
                 &mut builder_fields,
                 &mut builder_fields_for_new,
                 &mut methods,
                 &mut builder_to_struct,
-            );
+            )?;
         } else {
             simple_field(
+                span,
                 field.clone(),
                 &mut builder_fields,
                 &mut builder_fields_for_new,
                 &mut methods,
                 &mut builder_to_struct,
-            );
+            )?;
         }
     }
 
-    quote! {
+    let res = quote! {
         pub struct #builder_name {
             #(
                 #builder_fields
@@ -94,17 +115,19 @@ pub fn derive(input: TokenStream) -> TokenStream {
                 #methods
             )*
         }
-    }
-    .into()
+    };
+
+    Ok(res)
 }
 
 fn simple_field(
+    span: Span,
     field: Field,
     builder_fields: &mut Vec<TokenStream2>,
     builder_fields_for_new: &mut Vec<TokenStream2>,
     methods: &mut Vec<TokenStream2>,
     builder_to_struct: &mut Vec<TokenStream2>,
-) {
+) -> Result<()> {
     let Field {
         vis,
         ident: Some(ident),
@@ -112,8 +135,13 @@ fn simple_field(
         ..
     } = field.clone()
     else {
-        panic!("Invalid Structure.");
+        return Err(Error::new(
+            span,
+            "Invalid Field: this macro can be used for only named fields.",
+        ));
     };
+
+    let span = ident.span();
 
     let (typ, is_option) = match ty {
         Type::Path(TypePath { qself: None, path })
@@ -122,7 +150,10 @@ fn simple_field(
             let PathArguments::AngleBracketed(aga) =
                 path.segments.into_iter().next().unwrap().arguments
             else {
-                panic!("Invalid Option Structure.");
+                return Err(Error::new(
+                    span,
+                    "Invalid Option Structure: this macro can be used for only Option<T>.",
+                ));
             };
 
             (aga.args.to_token_stream(), true)
@@ -161,28 +192,30 @@ fn simple_field(
     };
 
     builder_to_struct.push(ts);
+
+    Ok(())
 }
 
 fn vec_field(
+    span: Span,
     field: Field,
     attr: &Attribute,
     builder_fields: &mut Vec<TokenStream2>,
     builder_fields_for_new: &mut Vec<TokenStream2>,
     methods: &mut Vec<TokenStream2>,
     builder_to_struct: &mut Vec<TokenStream2>,
-) {
+) -> Result<()> {
     let each_ident = (|| -> syn::parse::Result<Ident> {
         let meta_name_value: MetaNameValue = attr.parse_args()?;
         let Expr::Lit(ExprLit {
             lit: Lit::Str(lit), ..
         }) = meta_name_value.value
         else {
-            panic!("[1] Invalid Attribute. expect: #[builder(each = \"xxx\")]");
+            return Err(Error::new(span, "expected `builder(each = \"...\")`"));
         };
 
         Ok(format_ident!("{}", lit.value()))
-    })()
-    .expect("[2] Invalid Attribute. expect: #[builder(each = \"xxx\")]");
+    })()?;
 
     let Field {
         vis,
@@ -191,20 +224,25 @@ fn vec_field(
         ..
     } = field.clone()
     else {
-        panic!("Invalid Field.");
+        return Err(Error::new(
+            span,
+            "Invalid Field: this macro can be used for only named fields.",
+        ));
     };
 
+    let span = ident.span();
+
     let Type::Path(TypePath { qself: None, path }) = ty else {
-        panic!("Invalid Field. It must be Vec.");
+        return Err(Error::new(span, "Invalid Field. It must be Vec."));
     };
 
     if path.segments.first().map(|s| &s.ident) != Some(&format_ident!("Vec")) {
-        panic!("Invalid Field. It must be Vec.");
+        return Err(Error::new(span, "Invalid Field. It must be Vec."));
     }
 
     let PathArguments::AngleBracketed(aga) = path.segments.into_iter().next().unwrap().arguments
     else {
-        panic!("Invalid Vec Structure.");
+        return Err(Error::new(span, "Invalid Vec Structure."));
     };
 
     let typ = aga.args.to_token_stream();
@@ -245,4 +283,6 @@ fn vec_field(
             .drain(..)
             .collect(),
     });
+
+    Ok(())
 }

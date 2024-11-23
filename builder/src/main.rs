@@ -1,15 +1,13 @@
 // for playground
 
-use derive_builder::{Builder, Nop};
+use derive_builder::Builder;
 
-#[derive(Builder, Nop)]
+#[derive(Builder)]
 pub struct Command {
     executable: String,
-    #[nop]
     #[builder(each = "arg")]
     args: Vec<String>,
     #[builder(each = "env")]
-    #[nop]
     env: Vec<String>,
     current_dir: Option<String>,
 }
