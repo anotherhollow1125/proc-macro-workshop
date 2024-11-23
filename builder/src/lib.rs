@@ -205,17 +205,33 @@ fn vec_field(
     methods: &mut Vec<TokenStream2>,
     builder_to_struct: &mut Vec<TokenStream2>,
 ) -> Result<()> {
-    let each_ident = (|| -> syn::parse::Result<Ident> {
-        let meta_name_value: MetaNameValue = attr.parse_args()?;
-        let Expr::Lit(ExprLit {
-            lit: Lit::Str(lit), ..
-        }) = meta_name_value.value
-        else {
-            return Err(Error::new(span, "expected `builder(each = \"...\")`"));
-        };
+    let MetaNameValue {
+        path,
+        eq_token: _,
+        value,
+    } = attr.parse_args()?;
 
-        Ok(format_ident!("{}", lit.value()))
-    })()?;
+    // attr全体のSpanを得る方法がわからず...
+
+    let path = path.require_ident()?;
+    if path != "each" {
+        return Err(Error::new(
+            path.span(),
+            "expected `builder(each = \"...\")`",
+        ));
+    }
+
+    let Expr::Lit(ExprLit {
+        lit: Lit::Str(lit), ..
+    }) = value
+    else {
+        return Err(Error::new(
+            path.span(),
+            "expected `builder(each = \"...\")`",
+        ));
+    };
+
+    let each_ident = format_ident!("{}", lit.value());
 
     let Field {
         vis,
