@@ -28,6 +28,19 @@ where
     u: U,
 }
 
+#[derive(CustomDebug)]
+pub struct One<T> {
+    value: T,
+    two: Option<Box<Two<T>>>,
+}
+
+#[derive(CustomDebug)]
+struct Two<T> {
+    one: Box<One<T>>,
+}
+
+fn assert_debug<F: ::std::fmt::Debug>() {}
+
 fn main() {
     let f1 = FieldStr {
         value: "F",
@@ -62,4 +75,7 @@ fn main() {
     assert_eq!(debug, expected);
 
     println!("{}", debug);
+
+    assert_debug::<One<u8>>();
+    assert_debug::<Two<u8>>();
 }

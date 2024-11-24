@@ -4,7 +4,8 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{
     parse_macro_input, parse_quote, Data, DataStruct, DeriveInput, Error, Expr, ExprLit, Field,
-    Fields, GenericParam, Generics, Ident, Lit, Meta, MetaNameValue, Result, Type, TypePath,
+    Fields, GenericArgument, GenericParam, Generics, Ident, Lit, Meta, MetaNameValue, Path,
+    PathArguments, Result, Type, TypePath,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -112,13 +113,11 @@ fn add_trait_bounds(mut generics: Generics, fields: Fields) -> Generics {
                 return false;
             };
 
-            if path.is_ident("PhantomData") {
+            if path.segments.iter().any(|seg| seg.ident == "PhantomData") {
                 return false;
             }
 
-            path.segments
-                .iter()
-                .any(|seg| seg.ident == type_param.ident)
+            has_ident(path, &type_param.ident)
         });
 
         if need_debug {
@@ -126,4 +125,28 @@ fn add_trait_bounds(mut generics: Generics, fields: Fields) -> Generics {
         }
     }
     generics
+}
+
+fn has_ident<I>(path: &Path, ident: &I) -> bool
+where
+    I: ?Sized,
+    Ident: PartialEq<I>,
+{
+    if path.is_ident(ident) {
+        return true;
+    }
+
+    path.segments.iter().any(|seg| {
+        let PathArguments::AngleBracketed(ab) = &seg.arguments else {
+            return false;
+        };
+
+        ab.args.iter().any(|arg| {
+            let GenericArgument::Type(Type::Path(TypePath { path, .. })) = arg else {
+                return false;
+            };
+
+            has_ident(path, ident)
+        })
+    })
 }
