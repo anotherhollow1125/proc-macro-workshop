@@ -3,8 +3,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Data, DataStruct, DeriveInput, Error, Expr, ExprLit, Field, Fields, Ident,
-    Lit, Meta, MetaNameValue, Result,
+    parse_macro_input, parse_quote, Data, DataStruct, DeriveInput, Error, Expr, ExprLit, Field,
+    Fields, GenericParam, Generics, Ident, Lit, Meta, MetaNameValue, Result,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -14,6 +14,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let DeriveInput {
         ident,
         data: Data::Struct(DataStruct { fields, .. }),
+        generics,
         ..
     } = derive_input
     else {
@@ -25,19 +26,22 @@ pub fn derive(input: TokenStream) -> TokenStream {
         .into();
     };
 
-    derive_inner(ident, fields)
+    derive_inner(ident, fields, generics)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }
 
-fn derive_inner(ident: Ident, fields: Fields) -> Result<TokenStream2> {
+fn derive_inner(ident: Ident, fields: Fields, generics: Generics) -> Result<TokenStream2> {
     let fields = fields
         .into_iter()
         .map(field_method)
         .collect::<Result<Vec<_>>>()?;
 
+    let generics = add_trait_bounds(generics);
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
     Ok(quote! {
-        impl ::std::fmt::Debug for #ident {
+        impl #impl_generics ::std::fmt::Debug for #ident #ty_generics #where_clause {
             fn fmt(&self, fmt: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 fmt.debug_struct(::std::stringify!(#ident))
                     #(
@@ -93,4 +97,15 @@ fn field_method(field: Field) -> Result<TokenStream2> {
     };
 
     Ok(res)
+}
+
+// Add a bound `T: Debug` to every type parameter T.
+// ref: https://github.com/dtolnay/syn/blob/master/examples/heapsize/heapsize_derive/src/lib.rs
+fn add_trait_bounds(mut generics: Generics) -> Generics {
+    for param in &mut generics.params {
+        if let GenericParam::Type(ref mut type_param) = *param {
+            type_param.bounds.push(parse_quote!(::std::fmt::Debug));
+        }
+    }
+    generics
 }
