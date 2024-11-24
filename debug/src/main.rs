@@ -23,7 +23,7 @@ where
     U: 'static + Send + Sync,
 {
     #[debug = "TTT{:?}TTT"]
-    t: T,
+    t: std::marker::PhantomData<T>,
     #[debug = "UUU{:?}UUU"]
     u: U,
 }
@@ -49,10 +49,15 @@ fn main() {
 
     assert_eq!(debug, expected);
 
-    let f = FieldX { t: f1, u: f2 };
+    struct Hoge;
+
+    let f = FieldX {
+        t: std::marker::PhantomData::<Hoge>,
+        u: f2,
+    };
 
     let debug = format!("{:?}", f);
-    let expected = r#"FieldX { t: TTTFieldStr { value: "F", bitmask: 0b00011100 }TTT, u: UUUField { value: "F", bitmask: 0b00011100 }UUU }"#;
+    let expected = r#"FieldX { t: TTTPhantomData<derive_debug::main::Hoge>TTT, u: UUUField { value: "F", bitmask: 0b00011100 }UUU }"#;
 
     assert_eq!(debug, expected);
 

@@ -4,7 +4,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{
     parse_macro_input, parse_quote, Data, DataStruct, DeriveInput, Error, Expr, ExprLit, Field,
-    Fields, GenericParam, Generics, Ident, Lit, Meta, MetaNameValue, Result,
+    Fields, GenericParam, Generics, Ident, Lit, Meta, MetaNameValue, Result, Type, TypePath,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -32,13 +32,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
 }
 
 fn derive_inner(ident: Ident, fields: Fields, generics: Generics) -> Result<TokenStream2> {
+    let generics = add_trait_bounds(generics, fields.clone());
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
     let fields = fields
         .into_iter()
         .map(field_method)
         .collect::<Result<Vec<_>>>()?;
-
-    let generics = add_trait_bounds(generics);
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote! {
         impl #impl_generics ::std::fmt::Debug for #ident #ty_generics #where_clause {
@@ -101,9 +101,27 @@ fn field_method(field: Field) -> Result<TokenStream2> {
 
 // Add a bound `T: Debug` to every type parameter T.
 // ref: https://github.com/dtolnay/syn/blob/master/examples/heapsize/heapsize_derive/src/lib.rs
-fn add_trait_bounds(mut generics: Generics) -> Generics {
+fn add_trait_bounds(mut generics: Generics, fields: Fields) -> Generics {
     for param in &mut generics.params {
-        if let GenericParam::Type(ref mut type_param) = *param {
+        let GenericParam::Type(ref mut type_param) = *param else {
+            continue;
+        };
+
+        let need_debug = fields.iter().any(|field| {
+            let Type::Path(TypePath { path, .. }) = &field.ty else {
+                return false;
+            };
+
+            if path.is_ident("PhantomData") {
+                return false;
+            }
+
+            path.segments
+                .iter()
+                .any(|seg| seg.ident == type_param.ident)
+        });
+
+        if need_debug {
             type_param.bounds.push(parse_quote!(::std::fmt::Debug));
         }
     }
