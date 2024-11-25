@@ -39,6 +39,15 @@ struct Two<T> {
     one: Box<One<T>>,
 }
 
+pub trait Trait {
+    type Value;
+}
+
+#[derive(CustomDebug)]
+pub struct FieldXX<T: Trait> {
+    values: Vec<T::Value>,
+}
+
 fn assert_debug<F: ::std::fmt::Debug>() {}
 
 fn main() {
@@ -78,4 +87,13 @@ fn main() {
 
     assert_debug::<One<u8>>();
     assert_debug::<Two<u8>>();
+
+    // Does not implement Debug, but its associated type does.
+    struct Id;
+
+    impl Trait for Id {
+        type Value = u8;
+    }
+
+    assert_debug::<FieldXX<Id>>();
 }

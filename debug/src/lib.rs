@@ -103,17 +103,18 @@ fn field_method(field: Field) -> Result<TokenStream2> {
 // Add a bound `T: Debug` to every type parameter T.
 // ref: https://github.com/dtolnay/syn/blob/master/examples/heapsize/heapsize_derive/src/lib.rs
 fn add_trait_bounds(mut generics: Generics, fields: Fields) -> Generics {
-    for param in &mut generics.params {
-        let GenericParam::Type(ref mut type_param) = *param else {
+    for param in generics.params.clone() {
+        let GenericParam::Type(ref type_param) = param else {
             continue;
         };
 
+        // T
         let need_debug = fields.iter().any(|field| {
             let Type::Path(TypePath { path, .. }) = &field.ty else {
                 return false;
             };
 
-            if path.segments.iter().any(|seg| seg.ident == "PhantomData") {
+            if path.segments.last().unwrap().ident == "PhantomData" {
                 return false;
             }
 
@@ -121,9 +122,29 @@ fn add_trait_bounds(mut generics: Generics, fields: Fields) -> Generics {
         });
 
         if need_debug {
-            type_param.bounds.push(parse_quote!(::std::fmt::Debug));
+            let ident = type_param.ident.clone();
+
+            generics.make_where_clause().predicates.push(parse_quote! {
+                #ident: ::std::fmt::Debug
+            });
+        }
+
+        // T::Assoc
+        let need_debug_for_assocfields = fields.iter().find_map(|field| {
+            let Type::Path(TypePath { path, .. }) = &field.ty else {
+                return None;
+            };
+
+            has_assoc(path, &type_param.ident)
+        });
+
+        if let Some(assoc) = need_debug_for_assocfields {
+            generics.make_where_clause().predicates.push(parse_quote! {
+                #assoc: ::std::fmt::Debug
+            });
         }
     }
+
     generics
 }
 
@@ -132,7 +153,7 @@ where
     I: ?Sized,
     Ident: PartialEq<I>,
 {
-    if path.is_ident(ident) {
+    if path.segments.last().unwrap().ident == *ident {
         return true;
     }
 
@@ -147,6 +168,30 @@ where
             };
 
             has_ident(path, ident)
+        })
+    })
+}
+
+fn has_assoc<'a, I>(path: &'a Path, ident: &'a I) -> Option<&'a Path>
+where
+    I: ?Sized,
+    Ident: PartialEq<I>,
+{
+    if path.segments.first().unwrap().ident == *ident && path.segments.len() > 1 {
+        return Some(path);
+    }
+
+    path.segments.iter().find_map(|seg| {
+        let PathArguments::AngleBracketed(ab) = &seg.arguments else {
+            return None;
+        };
+
+        ab.args.iter().find_map(|arg| {
+            let GenericArgument::Type(Type::Path(TypePath { path, .. })) = arg else {
+                return None;
+            };
+
+            has_assoc(path, ident)
         })
     })
 }
