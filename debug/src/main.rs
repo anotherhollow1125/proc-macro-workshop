@@ -1,6 +1,7 @@
 // for play ground.
 
 use derive_debug::CustomDebug;
+use std::fmt::Debug;
 
 #[derive(CustomDebug)]
 pub struct Field<T> {
@@ -46,6 +47,24 @@ pub trait Trait {
 #[derive(CustomDebug)]
 pub struct FieldXX<T: Trait> {
     values: Vec<T::Value>,
+}
+
+#[derive(CustomDebug)]
+#[debug(bound = "T::Value: Debug")]
+pub struct Wrapper<T: Trait>
+where
+    T::Value: 'static + Clone + Copy,
+{
+    field: FieldXXX<T>,
+}
+
+#[derive(CustomDebug)]
+struct FieldXXX<T: Trait> {
+    values: Vec<T::Value>,
+    #[debug(bound = "T::Value: 'static")]
+    #[debug(bound = "T::Value: Clone + Copy")]
+    #[debug = "h{:?}g"]
+    hoge: usize,
 }
 
 fn assert_debug<F: ::std::fmt::Debug>() {}
@@ -96,4 +115,5 @@ fn main() {
     }
 
     assert_debug::<FieldXX<Id>>();
+    assert_debug::<Wrapper<Id>>();
 }
