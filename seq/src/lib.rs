@@ -1,6 +1,8 @@
+use itertools::peek_nth;
+use itertools::structs::PeekNth;
 use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, Group, Span, TokenStream as TokenStream2, TokenTree};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{braced, parse_macro_input, Error, Expr, ExprLit, ExprRange, Ident, Lit, Result, Token};
@@ -96,28 +98,54 @@ impl RepeatedBlock {
     }
 }
 
+#[derive(Clone)]
 enum NestToken {
     Block(Delimiter, Vec<NestToken>, Span),
-    PlaceHolder(Span),
+    PlaceHolder(PlaceHolder),
     Other(TokenTree),
+}
+
+#[derive(Clone)]
+enum PlaceHolder {
+    AsLit(Span),
+    AsIdent {
+        prefix: Ident,
+        suffix: Option<Ident>,
+        span: Span,
+    },
 }
 
 impl NestToken {
     fn render(&self, count: usize) -> TokenStream2 {
-        match self {
+        match self.clone() {
             Self::Block(delim, tokens, span) => {
                 let tokens = tokens.iter().map(|t| t.render(count));
 
-                let mut group = Group::new(*delim, quote! { #(#tokens)* });
-                group.set_span(*span);
+                let mut group = Group::new(delim, quote! { #(#tokens)* });
+                group.set_span(span);
 
                 quote! { #group }
             }
-            Self::PlaceHolder(s) => {
+            Self::PlaceHolder(PlaceHolder::AsLit(span)) => {
                 let mut count = proc_macro2::Literal::usize_unsuffixed(count);
-                count.set_span(*s);
+                count.set_span(span);
 
                 quote! { #count }
+            }
+            Self::PlaceHolder(PlaceHolder::AsIdent {
+                prefix,
+                suffix,
+                span,
+            }) => {
+                let mut ident = if let Some(suffix) = suffix {
+                    format_ident!("{}{}{}", prefix, count, suffix)
+                } else {
+                    format_ident!("{}{}", prefix, count)
+                };
+
+                ident.set_span(span);
+
+                quote! { #ident }
             }
             Self::Other(t) => quote! { #t },
         }
@@ -143,7 +171,7 @@ impl TokensWithPlaceHolders {
 }
 
 fn parse_stream_rec(place_holder_ident: Ident, stream: TokenStream2, tokens: &mut Vec<NestToken>) {
-    let mut trees = stream.into_iter();
+    let mut trees = peek_nth(stream.into_iter());
     while let Some(tree) = trees.next() {
         match tree {
             TokenTree::Group(group) => {
@@ -155,15 +183,89 @@ fn parse_stream_rec(place_holder_ident: Ident, stream: TokenStream2, tokens: &mu
             }
             TokenTree::Ident(ident) => {
                 let t = if ident == place_holder_ident {
-                    NestToken::PlaceHolder(ident.span())
+                    NestToken::PlaceHolder(PlaceHolder::AsLit(ident.span()))
                 } else {
-                    NestToken::Other(TokenTree::Ident(ident))
+                    if let Some(as_ident) = parse_place_holder_ident(
+                        place_holder_ident.clone(),
+                        ident.clone(),
+                        &mut trees,
+                    ) {
+                        NestToken::PlaceHolder(as_ident)
+                    } else {
+                        NestToken::Other(TokenTree::Ident(ident))
+                    }
                 };
                 tokens.push(t);
             }
             t => tokens.push(NestToken::Other(t)),
         }
     }
+}
+
+fn parse_place_holder_ident(
+    place_holder_ident: Ident,
+    prefix: Ident,
+    trees: &mut PeekNth<impl Iterator<Item = TokenTree>>,
+) -> Option<PlaceHolder> {
+    // pre~N~suff
+
+    // ~
+    let Some(TokenTree::Punct(punct)) = trees.peek() else {
+        return None;
+    };
+
+    // ~
+    if punct.as_char() != '~' {
+        return None;
+    };
+
+    // N
+    let Some(TokenTree::Ident(ident)) = trees.peek_nth(1) else {
+        return None;
+    };
+
+    // N
+    if &place_holder_ident != ident {
+        return None;
+    }
+
+    let suffix = (|| {
+        // ~
+        let Some(TokenTree::Punct(punct)) = trees.peek_nth(2) else {
+            return None;
+        };
+
+        // ~
+        if punct.as_char() != '~' {
+            return None;
+        }
+
+        // suff
+        if let Some(TokenTree::Ident(ident)) = trees.peek_nth(3) {
+            Some(ident.clone())
+        } else {
+            None
+        }
+    })();
+
+    // ~
+    let _ = trees.next();
+    // N
+    let _ = trees.next();
+    if let Some(_) = suffix.as_ref() {
+        // ~
+        let _ = trees.next();
+        // suff
+        let _ = trees.next();
+    }
+
+    let span = prefix.span();
+
+    Some(PlaceHolder::AsIdent {
+        prefix,
+        suffix,
+        span,
+    })
 }
 
 /* // 良い方針と思ったがうまくいかなかった
