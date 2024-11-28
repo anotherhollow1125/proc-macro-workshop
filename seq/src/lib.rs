@@ -9,18 +9,21 @@ use syn::{braced, parse_macro_input, Error, Expr, ExprLit, ExprRange, Ident, Lit
 
 #[proc_macro]
 pub fn seq(input: TokenStream) -> TokenStream {
-    let repeated_block = parse_macro_input!(input as RepeatedBlock);
+    let seq_input = parse_macro_input!(input as SeqInput);
 
-    repeated_block.render().into()
+    seq_input
+        .render()
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
 }
 
-struct RepeatedBlock {
+struct SeqInput {
     variable: Ident,
-    range: Box<dyn Iterator<Item = usize>>,
+    range: Vec<usize>,
     tt: TokenStream2,
 }
 
-impl Parse for RepeatedBlock {
+impl Parse for SeqInput {
     fn parse(input: ParseStream) -> Result<Self> {
         let variable = input.parse()?;
         let _in: Token![in] = input.parse()?;
@@ -38,7 +41,7 @@ impl Parse for RepeatedBlock {
     }
 }
 
-fn range_to_iter(range: ExprRange) -> Result<Box<dyn Iterator<Item = usize>>> {
+fn range_to_iter(range: ExprRange) -> Result<Vec<usize>> {
     use std::ops::{Range, RangeInclusive};
     use syn::RangeLimits::{Closed, HalfOpen};
 
@@ -53,7 +56,7 @@ fn range_to_iter(range: ExprRange) -> Result<Box<dyn Iterator<Item = usize>>> {
             lit: Lit::Int(i), ..
         }) = exp
         else {
-            return Err(Error::new(span, "expected usize literal"));
+            return Err(Error::new(span, "expected integer literal"));
         };
 
         i.base10_parse()
@@ -72,18 +75,18 @@ fn range_to_iter(range: ExprRange) -> Result<Box<dyn Iterator<Item = usize>>> {
         // start..end
         HalfOpen(_) => {
             let range = Range { start, end };
-            Ok(Box::new(range.into_iter()))
+            Ok(range.collect())
         }
         // start..=end
         Closed(_) => {
             let range = RangeInclusive::new(start, end);
-            Ok(Box::new(range.into_iter()))
+            Ok(range.collect())
         }
     }
 }
 
-impl RepeatedBlock {
-    fn render(self) -> TokenStream2 {
+impl SeqInput {
+    fn render(self) -> Result<TokenStream2> {
         let Self {
             variable,
             range,
@@ -92,9 +95,13 @@ impl RepeatedBlock {
 
         let tokens_with_place_holders = TokensWithPlaceHolders::new(variable, tt);
 
+        todo!()
+
+        /*
         let tokens = range.map(|count| tokens_with_place_holders.render(count));
 
         quote! { #(#tokens)* }
+        */
     }
 }
 
@@ -103,6 +110,7 @@ enum NestToken {
     Block(Delimiter, Vec<NestToken>, Span),
     PlaceHolder(PlaceHolder),
     Other(TokenTree),
+    RepeatTarget(Vec<NestToken>, Span),
 }
 
 #[derive(Clone)]
@@ -115,39 +123,107 @@ enum PlaceHolder {
     },
 }
 
-impl NestToken {
+impl PlaceHolder {
     fn render(&self, count: usize) -> TokenStream2 {
-        match self.clone() {
-            Self::Block(delim, tokens, span) => {
-                let tokens = tokens.iter().map(|t| t.render(count));
-
-                let mut group = Group::new(delim, quote! { #(#tokens)* });
-                group.set_span(span);
-
-                quote! { #group }
-            }
-            Self::PlaceHolder(PlaceHolder::AsLit(span)) => {
+        match self {
+            Self::AsLit(span) => {
                 let mut count = proc_macro2::Literal::usize_unsuffixed(count);
-                count.set_span(span);
+                count.set_span(*span);
 
                 quote! { #count }
             }
-            Self::PlaceHolder(PlaceHolder::AsIdent {
+            Self::AsIdent {
                 prefix,
                 suffix,
                 span,
-            }) => {
+            } => {
                 let mut ident = if let Some(suffix) = suffix {
                     format_ident!("{}{}{}", prefix, count, suffix)
                 } else {
                     format_ident!("{}{}", prefix, count)
                 };
 
-                ident.set_span(span);
+                ident.set_span(*span);
 
                 quote! { #ident }
             }
+        }
+    }
+}
+
+impl NestToken {
+    fn render(&self, range: &[usize]) -> Result<TokenStream2> {
+        match self.clone() {
+            Self::Block(delim, tokens, span) => {
+                let tokens = tokens
+                    .iter()
+                    .map(|t| t.render(range))
+                    .collect::<Result<Vec<_>>>()?;
+
+                let mut group = Group::new(delim, quote! { #(#tokens)* });
+                group.set_span(span);
+
+                Ok(quote! { #group })
+            }
+            Self::PlaceHolder(_) => Err(Error::new(
+                self.span(),
+                "invalid repeat variable place holder.",
+            )),
+            Self::RepeatTarget(tokens, _) => {
+                let tokens = range.iter().flat_map(|&count| {
+                    tokens
+                        .iter()
+                        .map(move |token| token.render_in_repeat_target(count))
+                });
+
+                Ok(quote! { #(#tokens)* })
+            }
+            Self::Other(t) => Ok(quote! { #t }),
+        }
+    }
+
+    fn render_in_repeat_target(&self, count: usize) -> TokenStream2 {
+        match self.clone() {
+            Self::Block(delim, tokens, span) => {
+                let tokens = tokens.iter().map(|t| t.render_in_repeat_target(count));
+
+                let mut group = Group::new(delim, quote! { #(#tokens)* });
+                group.set_span(span);
+
+                quote! { #group }
+            }
+            Self::PlaceHolder(place_holder) => place_holder.render(count),
+            Self::RepeatTarget(tokens, span) => todo!(),
             Self::Other(t) => quote! { #t },
+        }
+    }
+
+    // 2段以上のRepeatTarget( `#(...)*` )については現在対象のプレースホルダを置き換える以上のことはしない。例えば別のマクロのためのものと考える
+    fn render_in_deep_nest(&self, count: usize) -> TokenStream2 {
+        match self.clone() {
+            Self::Block(delim, tokens, span) => {
+                let tokens = tokens.iter().map(|t| t.render_in_deep_nest(count));
+
+                let mut group = Group::new(delim, quote! { #(#tokens)* });
+                group.set_span(span);
+
+                quote! { #group }
+            }
+            Self::PlaceHolder(place_holder) => place_holder.render(count),
+            Self::RepeatTarget(tokens, span) => todo!(),
+            Self::Other(t) => quote! { #t },
+        }
+    }
+
+    fn span(&self) -> Span {
+        match self {
+            NestToken::Block(_, _, span) => *span,
+            NestToken::PlaceHolder(place_holder) => match place_holder {
+                PlaceHolder::AsLit(span) => *span,
+                PlaceHolder::AsIdent { span, .. } => *span,
+            },
+            NestToken::Other(token_tree) => token_tree.span(),
+            NestToken::RepeatTarget(_, span) => *span,
         }
     }
 }
@@ -163,15 +239,19 @@ impl TokensWithPlaceHolders {
         Self(tokens)
     }
 
-    fn render(&self, count: usize) -> TokenStream2 {
-        let nt = self.0.iter().map(|nt| nt.render(count));
+    fn render(&self, range: &[usize]) -> Result<TokenStream2> {
+        let nt = self
+            .0
+            .iter()
+            .map(|nt| nt.render(range))
+            .collect::<Result<Vec<_>>>()?;
 
-        quote! { #(#nt)* }
+        Ok(quote! { #(#nt)* })
     }
 }
 
 fn parse_stream_rec(place_holder_ident: Ident, stream: TokenStream2, tokens: &mut Vec<NestToken>) {
-    let mut trees = peek_nth(stream.into_iter());
+    let mut trees = peek_nth(stream);
     while let Some(tree) = trees.next() {
         match tree {
             TokenTree::Group(group) => {
@@ -184,16 +264,12 @@ fn parse_stream_rec(place_holder_ident: Ident, stream: TokenStream2, tokens: &mu
             TokenTree::Ident(ident) => {
                 let t = if ident == place_holder_ident {
                     NestToken::PlaceHolder(PlaceHolder::AsLit(ident.span()))
+                } else if let Some(as_ident) =
+                    parse_place_holder_ident(place_holder_ident.clone(), ident.clone(), &mut trees)
+                {
+                    NestToken::PlaceHolder(as_ident)
                 } else {
-                    if let Some(as_ident) = parse_place_holder_ident(
-                        place_holder_ident.clone(),
-                        ident.clone(),
-                        &mut trees,
-                    ) {
-                        NestToken::PlaceHolder(as_ident)
-                    } else {
-                        NestToken::Other(TokenTree::Ident(ident))
-                    }
+                    NestToken::Other(TokenTree::Ident(ident))
                 };
                 tokens.push(t);
             }
@@ -252,7 +328,7 @@ fn parse_place_holder_ident(
     let _ = trees.next();
     // N
     let _ = trees.next();
-    if let Some(_) = suffix.as_ref() {
+    if suffix.is_some() {
         // ~
         let _ = trees.next();
         // suff
