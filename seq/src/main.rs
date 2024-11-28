@@ -14,6 +14,15 @@ seq!(N in 1..4 {
     }
 });
 
+seq!(N in 0..16 {
+    #[derive(Copy, Clone, PartialEq, Debug)]
+    enum Interrupt {
+        #(
+            Irq~N,
+        )*
+    }
+});
+
 // This f0 is written separately to detect whether your macro correctly starts
 // with the first iteration at N=1 as specified in the invocation. If the macro
 // incorrectly started at N=0 like in the previous tests cases, the first
@@ -28,4 +37,9 @@ fn main() {
     let _ = f1_() + f2_() + f3_();
 
     assert_eq!(sum, 100 + 2 + 4 + 6);
+
+    let interrupt = Interrupt::Irq8;
+
+    assert_eq!(interrupt as u8, 8);
+    assert_eq!(interrupt, Interrupt::Irq8);
 }
