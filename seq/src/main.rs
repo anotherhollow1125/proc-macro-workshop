@@ -32,6 +32,22 @@ fn f0() -> u64 {
     100
 }
 
+// try nest
+
+seq!(N in 0..5 {
+    #(
+        fn nest~N~outer() {
+            seq!(M in 0..10 {
+                println!("{}", N + M);
+            });
+            seq!(L in 0..5 {
+                let tmp~N = vec![#(L,)*].len() + N;
+                println!("{}", tmp~N);
+            });
+        }
+    )*
+});
+
 fn main() {
     let sum = f0() + f1() + f2() + f3();
     let _ = f1_() + f2_() + f3_();
@@ -42,4 +58,10 @@ fn main() {
 
     assert_eq!(interrupt as u8, 8);
     assert_eq!(interrupt, Interrupt::Irq8);
+
+    nest0outer();
+    nest1outer();
+    nest2outer();
+    nest3outer();
+    nest4outer();
 }
