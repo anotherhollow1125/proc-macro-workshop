@@ -6,10 +6,7 @@ use quote::{format_ident, quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::token::{Pound, Star};
-use syn::{
-    braced, parse_macro_input, parse_quote, Error, Expr, ExprLit, ExprRange, Ident, Lit, Result,
-    Token,
-};
+use syn::{braced, parse_macro_input, parse_quote, Error, Ident, LitInt, Result, Token};
 
 #[proc_macro]
 pub fn seq(input: TokenStream) -> TokenStream {
@@ -29,10 +26,24 @@ struct SeqInput {
 
 impl Parse for SeqInput {
     fn parse(input: ParseStream) -> Result<Self> {
+        // N
         let variable = input.parse()?;
+        // in
         let _in: Token![in] = input.parse()?;
-        let range: ExprRange = input.parse()?;
-        let range = range_to_iter(range)?;
+
+        // a..=b
+        let from: LitInt = input.parse()?;
+        // ref: https://github.com/jonhoo/proc-macro-workshop/blob/108929e4f3c90cf0a838507f6b557c742261fab9/seq/seq-proc/src/lib.rs#L24-L29
+        let inclusive = input.peek(Token![..=]);
+        if inclusive {
+            <Token![..=]>::parse(input)?;
+        } else {
+            <Token![..]>::parse(input)?;
+        }
+        let to: LitInt = input.parse()?;
+        let range = make_range(from, to, inclusive)?;
+
+        // {..}
         let content;
         let _braces = braced!(content in input);
         let tt = TokenStream2::parse(&content)?;
@@ -45,48 +56,15 @@ impl Parse for SeqInput {
     }
 }
 
-fn range_to_iter(range: ExprRange) -> Result<Vec<usize>> {
-    use std::ops::{Range, RangeInclusive};
-    use syn::RangeLimits::{Closed, HalfOpen};
+fn make_range(from: LitInt, to: LitInt, inclusive: bool) -> Result<Vec<usize>> {
+    let from = from.base10_parse()?;
+    let mut to = to.base10_parse()?;
 
-    let span = range.span();
-
-    let ExprRange {
-        start, limits, end, ..
-    } = range;
-
-    let into_usize = |exp: &Expr| -> Result<usize> {
-        let Expr::Lit(ExprLit {
-            lit: Lit::Int(i), ..
-        }) = exp
-        else {
-            return Err(Error::new(span, "expected integer literal"));
-        };
-
-        i.base10_parse()
-    };
-
-    let Some(end) = end.map(|e| into_usize(&e)).transpose()? else {
-        return Err(Error::new(span, "expected end of range"));
-    };
-
-    let start = match start {
-        Some(start) => into_usize(&start)?,
-        None => 0,
-    };
-
-    match limits {
-        // start..end
-        HalfOpen(_) => {
-            let range = Range { start, end };
-            Ok(range.collect())
-        }
-        // start..=end
-        Closed(_) => {
-            let range = RangeInclusive::new(start, end);
-            Ok(range.collect())
-        }
+    if inclusive {
+        to += 1usize;
     }
+
+    Ok((from..to).collect())
 }
 
 impl SeqInput {
